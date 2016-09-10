@@ -103,9 +103,15 @@ with graph.as_default():
         deconv_filter_1 = tf.Variable(tf.truncated_normal([5,5,256,1], stddev=0.1), name="filters/1")
         deconv_filter_2 = tf.Variable(tf.truncated_normal([8,8,64,256], stddev=0.1), name="filters/2")
         deconv_filter_3 = tf.Variable(tf.truncated_normal([10,10,1,64], stddev=0.1), name="filters/3")
-        deconv_bias_1 = tf.Variable(tf.zeros([256]), name="biases1")
-        deconv_bias_2 = tf.Variable(tf.zeros([64]), name="biases2")
-        deconv_bias_3 = tf.Variable(tf.zeros([1]), name="biases3")
+        #deconv_bias_1 = tf.Variable(tf.zeros([256]), name="biases1")
+        #deconv_bias_2 = tf.Variable(tf.zeros([64]), name="biases2")
+        #deconv_bias_3 = tf.Variable(tf.zeros([1]), name="biases3")
+        deconv_offset_1 = tf.Variable(tf.truncated_normal([256], stddev=0.1), name="offset1")
+        deconv_offset_2 = tf.Variable(tf.truncated_normal([64], stddev=0.1), name="offset2")
+        deconv_offset_3 = tf.Variable(tf.truncated_normal([1], stddev=0.1), name="offset3")
+        deconv_scale_1 = tf.Variable(tf.truncated_normal([256], stddev=0.1), name="scale1")
+        deconv_scale_2 = tf.Variable(tf.truncated_normal([64], stddev=0.1), name="scale2")
+        deconv_scale_3 = tf.Variable(tf.truncated_normal([1], stddev=0.1), name="scale3")
 
     # Variables for classifier
     with tf.name_scope("discriminator"):
@@ -139,6 +145,9 @@ with graph.as_default():
     #    hidden1 = tf.nn.relu(tf.matmul(labels, glayer1_weights) + glayer1_biases)
     #    hidden2 = tf.sigmoid(tf.matmul(hidden1, glayer2_weights) + glayer2_biases)
     #    return tf.reshape(hidden2,[-1,image_size, image_size,1])
+    def batch_norm(inputs, scale, offset):
+        mean, variance = tf.nn.moments(inputs,axes=[0,1,2])
+        return tf.nn.batch_normalization(inputs, mean, variance, offset, scale, variance_epsilon=1e-5)
     
     def deconv_generator_model(noise):
         square_noise = tf.reshape(noise, [-1,8,8,1])
@@ -149,7 +158,7 @@ with graph.as_default():
                                          output_shape=[num_examples,12,12,256],
                                          strides=[1,1,1,1],
                                          padding='VALID', name="fm1")
-            layer1 = tf.nn.relu(tf.nn.bias_add(fm1,deconv_bias_1), name="layer1")
+            layer1 = tf.nn.relu(batch_norm(fm1,deconv_scale_1, deconv_offset_1))
             print("layer1 shape= {0}".format(layer1.get_shape()))
             fm2 = tf.nn.conv2d_transpose(value=layer1,
                                          filter=deconv_filter_2,
@@ -157,14 +166,14 @@ with graph.as_default():
                                          strides=[1,1,1,1],
                                          padding='VALID', name="fm2")
             print("deconv bias2 shape= {0}".format(deconv_bias_2.get_shape()))
-            layer2 = tf.nn.relu(tf.nn.bias_add(fm2,deconv_bias_2), name="layer2")
+            layer2 = tf.nn.relu(batch_norm(fm2,deconv_scale_2, deconv_offset_2))
             print("layer2 shape= {0}".format(layer2.get_shape()))
             fm3 = tf.nn.conv2d_transpose(value=layer2,
                                          filter=deconv_filter_3,
                                          output_shape=[num_examples,28,28,1],
                                          strides=[1,1,1,1],
                                          padding='VALID', name="fm3")
-            layer3 = tf.nn.relu(tf.nn.bias_add(fm3,deconv_bias_3),name="layer3")
+            layer3 = tf.nn.relu(batch_norm(fm3,deconv_scale_3, deconv_offset_3))
             print("layer3 shape= {0}".format(layer3.get_shape()))
             output = tf.reshape(layer3,[-1,image_size, image_size,1])
             print("output shape= {0}".format(output.get_shape()))
@@ -239,20 +248,19 @@ with tf.Session(graph=graph) as session:
         elif float(l2+l1)<training_thresh and updating=='discriminator':
             print("Updating generator...")
             updating='generator'
-        
-        if updating == 'generator':
-            updated_generator=True
 
         # update model
         #if updating=='discriminator':
         #    _ = session.run([classifier_optimizer], feed_dict=feed_dict)
         #elif(updating=='generator'):
         #    _ = session.run([generator_optimizer], feed_dict=feed_dict)
-        #if l3<l1+l2:
-        _ = session.run([classifier_optimizer], feed_dict=feed_dict)
-        #else:
-        summary, _, gs = session.run([merged, generator_optimizer, global_step], feed_dict=feed_dict)
-        updated_generator=True
+        if l3<l1+l2:
+            _,_ = session.run([classifier_optimizer, global_step], feed_dict=feed_dict)
+        else:
+            _ = session.run([generator_optimizer], feed_dict=feed_dict)
+            _ = session.run([generator_optimizer], feed_dict=feed_dict)
+            summary, _, gs = session.run([merged, generator_optimizer, global_step], feed_dict=feed_dict)
+            updated_generator=True
         train_writer.add_summary(summary, gs)
         #    _ = session.run([generator_optimizer], feed_dict=feed_dict)
         #    updated_generator=True
