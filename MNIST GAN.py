@@ -22,6 +22,12 @@ get_ipython().magic(u'matplotlib inline')
 
 # In[ ]:
 
+import PIL.Image as im
+
+def save_image(image):
+    im.fromarray(np.uint8(pl.cm.gray(image)*255)).convert('RGB').save("result.jpeg")
+    
+
 pl.rcParams["figure.figsize"] = 15,15
 
 def plot_images(session,image_graph):
@@ -37,7 +43,9 @@ def plot_images(session,image_graph):
             else:
                 full_image = np.vstack([full_image,np.hstack(new_row)])
             new_row = []
+    save_image(full_image)
     pl.imshow(full_image,cmap="gray")
+    
     display.display(pl.gcf())
     time.sleep(1.0)
 
@@ -141,15 +149,11 @@ mnist = input_data.read_data_sets("MNIST_data", one_hot=True)
 def maxpool(x, k=2):
     return tf.nn.max_pool(x, ksize=[1, k, k, 1], strides=[1, k, k, 1], padding='SAME')
 
-def batch_norm(inputs, scale, offset):
-    mean, variance = tf.nn.moments(inputs,axes=[0,1,2])
-    return tf.nn.batch_normalization(inputs, mean, variance, offset, scale, variance_epsilon=1e-5)
-
-def conv (input_data, shape, name="conv2d"):
+def conv (input_data, shape, k=2, name="conv2d"):
     with tf.variable_scope(name):
         w = tf.get_variable("w", shape, initializer=tf.truncated_normal_initializer(stddev=0.1))
         b = tf.get_variable("b", [shape[3]], initializer=tf.truncated_normal_initializer(stddev=0.1))
-        return tf.nn.conv2d(input_data, w, [1, 2, 2, 1], padding='SAME')+b
+        return tf.nn.conv2d(input_data, w, [1, k, k, 1], padding='SAME')+b
 
 
 def fully_connected(input_data, shape, name="fully_connected"):
@@ -163,14 +167,13 @@ def discriminator(data, reuse=True):
         if reuse:
             tf.get_variable_scope().reuse_variables()
         channels = 32
-        d_l1 = maxpool(conv(data, shape=[3, 3, num_channels, channels], name="layer1"))
-        d_l2 = conv(tf.nn.relu(d_l1), shape=[3, 3, channels, channels/2], name="layer2")
-        d_l3 = conv(tf.nn.relu(d_l2), shape=[3, 3, channels/2, channels/4], name="layer3")
-        d_l3_reshaped = tf.reshape(d_l3, [tf.shape(d_l3)[0],2*2*8])
-        fm3_shape = 2*2*channels/4
-        d_l4 = fully_connected(tf.nn.relu(d_l3_reshaped), shape=[fm3_shape,fm3_shape/2], name="layer4")
-        d_l5 = fully_connected(d_l4, shape=[fm3_shape/2,1], name="layer5")
-        #print ("d_l5 {0}".format(d_l5.get_shape()))
+        d_l1 = conv(data, shape=[3, 3, num_channels, channels], k=2, name="layer1")
+        d_l2 = batch_norm(conv(tf.nn.relu6(d_l1), shape=[3, 3, channels, channels/2], k=2,name="layer2"), channels/2, name = "layer2")
+        d_l3 = batch_norm(conv(tf.nn.relu6(d_l2), shape=[3, 3, channels/2, channels/4], k=2, name="layer3"), channels/4, name = "layer3")
+        fm3_shape = 4*4*channels/4
+        d_l3_reshaped = tf.reshape(d_l3, [tf.shape(d_l3)[0],fm3_shape])
+        d_l4 = fully_connected(tf.nn.relu6(d_l3_reshaped), shape=[fm3_shape,fm3_shape/2], name="layer4")
+        d_l5 = fully_connected(tf.nn.relu6(d_l4), shape=[fm3_shape/2,1], name="layer5")
         return tf.Print(tf.nn.sigmoid(d_l5),[tf.shape(d_l5)], first_n=1)
     
 def deconv2d(input_data, filter_shape, output_shape, name="deconv2d"):
@@ -182,40 +185,48 @@ def deconv2d(input_data, filter_shape, output_shape, name="deconv2d"):
                                      strides=[1,1,1,1],
                                      padding='VALID', name="feature_maps")
     
-def batch_norm1(input_data, size,name="batch_norm"):
+def batch_norm(input_data, size,name="batch_norm"):
     with tf.variable_scope(name):
         offset = tf.get_variable("offset", [size], initializer=tf.truncated_normal_initializer(stddev=0.1))
         scale = tf.get_variable("scale", [size], initializer=tf.truncated_normal_initializer(stddev=0.1))
         mean, variance = tf.nn.moments(input_data,axes=[0,1,2])
         return tf.nn.batch_normalization(input_data, mean, variance, offset, scale, variance_epsilon=1e-5)
     
-    
-def deconv_generator_model(noise, reuse=True):
+def generator(noise, reuse=True):
     square_noise = tf.reshape(noise, [-1,8,8,1])
     num_examples = tf.shape(square_noise)[0]
     with tf.variable_scope("generator"):
         if reuse:
             tf.get_variable_scope().reuse_variables()
+            
+        #d_l5 = fully_connected(tf.nn.relu6(d_l4), shape=[fm3_shape/2,1], name="layer5")
         fm1 = deconv2d(square_noise, # 64,8,8,1
-                      filter_shape= [5,5,256,1], 
-                      output_shape=[num_examples,12,12,256],
+                      filter_shape= [5,5,512,1], 
+                      output_shape=[num_examples,12,12,512],
                       name = "layer1")
-        layer1 = tf.nn.relu(batch_norm1(fm1,256, name = "layer1"))
+        layer1 = tf.nn.relu(batch_norm(fm1,512, name = "layer1"))
         fm2 = deconv2d(layer1,
-                      filter_shape= [8,8,64,256],
-                      output_shape=[num_examples,19,19,64],
+                      filter_shape= [6,6,256,512],
+                      output_shape=[num_examples,17,17,256],
                       name = "layer2")
-        layer2 = tf.nn.relu(batch_norm1(fm2,64, name = "layer2"))
+        layer2 = tf.nn.relu(batch_norm(fm2,256, name = "layer2"))
 
         fm3 = deconv2d(layer2,
-                      filter_shape=[10,10,1,64],
-                      output_shape=[num_examples,28,28,1],
+                      filter_shape=[6,6,64,256],
+                      output_shape=[num_examples,22,22,64],
                       name = "layer3")
-        layer3 = tf.nn.relu(batch_norm1(fm3,1, name = "layer3"))
-        output = tf.reshape(layer3,[-1,image_size, image_size,1])
+        layer3 = tf.nn.relu(batch_norm(fm3,64, name = "layer3"))
+        
+        fm4 = deconv2d(layer3,
+              filter_shape=[7,7,1,64],
+              output_shape=[num_examples,28,28,1],
+              name = "layer4")
+        layer4 = tf.nn.sigmoid(fm4)
+        output = tf.reshape(layer4,[-1,image_size, image_size,1])
         print("layer1 shape= {0}".format(layer1.get_shape()))
         print("layer2 shape= {0}".format(layer2.get_shape()))
         print("layer3 shape= {0}".format(layer3.get_shape()))
+        print("layer4 shape= {0}".format(layer4.get_shape()))
         print("output shape= {0}".format(output.get_shape()))
     return output
 
@@ -246,15 +257,15 @@ with graph.as_default():
 
     #Generator Loss
     sample_points = tf.constant(np.random.uniform(0,1,(batch_size,random_vector_size)).astype(np.float32))
-    debug_image = deconv_generator_model(sample_points, reuse=False)
-    generated_image = deconv_generator_model(tf_train_random)
+    debug_image = generator(sample_points, reuse=False)
+    generated_image = generator(tf_train_random)
     
     generator_logits = discriminator(generated_image, reuse=False)
     generator_loss = tf.nn.l2_loss(generator_logits- tf.ones([batch_size,1]))
 
     # Generator Optimizer
     generator_variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "generator")
-    generator_learnrate = tf.train.exponential_decay(0.005, global_step, 1000, 0.96, staircase=True)
+    generator_learnrate = tf.train.exponential_decay(0.006, global_step, 500, 0.96, staircase=True)
     generator_optimizer = tf.train.AdagradOptimizer(generator_learnrate).minimize(generator_loss, var_list=generator_variables, global_step=global_step)  
 
     # Discriminator Loss
@@ -270,7 +281,7 @@ with graph.as_default():
 
     # Discriminator Optimizer.
     classifier_variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "discriminator")
-    classifier_learnrate = tf.train.exponential_decay(0.005, global_step, 1000, 0.96, staircase=True)
+    classifier_learnrate = tf.train.exponential_decay(0.006, global_step, 500, 0.96, staircase=True)
     classifier_optimizer = tf.train.AdagradOptimizer(classifier_learnrate).minimize(classifier_loss, var_list=classifier_variables, global_step=global_step)
     d_opt = tf.train.AdagradOptimizer(classifier_learnrate)
     d_gradients = d_opt.compute_gradients(classifier_loss, classifier_variables)
@@ -284,8 +295,6 @@ with graph.as_default():
         variable_summaries(var, var.name)
     variable_summaries(classifier_real_logits, "discriminator/real_logits")
     variable_summaries(classifier_fake_logits, "discriminator/fake_logits")
-    #variable_summaries(tf.nn.sigmoid_cross_entropy_with_logits(classifier_real_logits, tf.ones([batch_size,1])), "discriminator/cross_entropy_real_logits")
-    #variable_summaries(tf.nn.sigmoid_cross_entropy_with_logits(classifier_fake_logits, tf.zeros([batch_size,1])), "discriminator/cross_entropy_fake_logits")
     variable_summaries(generator_logits, "generator/logits")
         
         
@@ -356,6 +365,11 @@ with tf.Session(graph=graph) as session:
             if updated_generator:
                 plot_images(session,debug_image)
                 updated_generator=False
+
+
+# In[ ]:
+
+
 
 
 # In[ ]:
