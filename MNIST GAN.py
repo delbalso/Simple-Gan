@@ -27,7 +27,7 @@ get_ipython().magic(u'matplotlib inline')
 import PIL.Image as im
 
 def save_image(image):
-    im.fromarray(np.uint8(pl.cm.gray(image)*255)).convert('RGB').save("result.jpeg")
+    im.fromarray(np.uint8(pl.cm.Greys(image)*255)).convert('RGB').save("result.jpeg")
     
 
 pl.rcParams["figure.figsize"] = 15,15
@@ -49,7 +49,7 @@ def plot_images(image_ref, session=None, tensor=True):
                 full_image = np.vstack([full_image,np.hstack(new_row)])
             new_row = []
     save_image(full_image)
-    pl.imshow(full_image,cmap="gray")
+    pl.imshow(full_image,cmap="gray_r")
     
     display.display(pl.gcf())
     time.sleep(1.0)
@@ -154,9 +154,9 @@ mnist = input_data.read_data_sets("MNIST_data", one_hot=True)
 def maxpool(x, k=2):
     return tf.nn.max_pool(x, ksize=[1, k, k, 1], strides=[1, k, k, 1], padding='SAME')
 
-def conv (input_data, shape, k=2, name="conv2d"):
+def conv(input_data, shape, k=2, name="conv2d"):
     with tf.variable_scope(name):
-        filter = tf.get_variable("filter", shape, initializer=tf.contrib.layers.xavier_initializer_conv2d(uniform=False))
+        filter = tf.get_variable("filter", shape, initializer=tf.truncated_normal_initializer(stddev=1))
         b = tf.get_variable("b", [shape[3]], initializer=tf.truncated_normal_initializer(stddev=0.01))
         return tf.nn.conv2d(input_data, filter, [1, k, k, 1], padding='SAME')+b
 
@@ -184,22 +184,22 @@ def discriminator(data, reuse=True):
         if reuse:
             tf.get_variable_scope().reuse_variables()
         channels = 4
-        d_l1 = conv(data, shape=[3, 3, num_channels, channels], k=2, name="layer1")
-        d_l2 = batch_norm(conv(tf.nn.relu6(d_l1), shape=[3, 3, channels, channels/2], k=2,name="layer2"), channels/2, name = "layer2")
-        d_l3 = batch_norm(conv(tf.nn.relu6(d_l2), shape=[3, 3, channels/2, channels/4], k=2, name="layer3"), channels/4, name = "layer3")
+        d_l1 = batch_norm(conv(data, shape=[4, 4, num_channels, channels], k=2, name="layer1"), channels/1, name = "layer1")
+        d_l2 = batch_norm(conv(tf.nn.relu6(d_l1), shape=[4, 4, channels, channels/2], k=2,name="layer2"), channels/2, name = "layer2")
+        d_l3 = batch_norm(conv(tf.nn.relu6(d_l2), shape=[4, 4, channels/2, channels/4], k=2, name="layer3"), channels/4, name = "layer3")
         fm3_shape = 4*4*channels/4
         d_l3_reshaped = tf.reshape(d_l3, [tf.shape(d_l3)[0],fm3_shape])
         #data_reshaped = tf.reshape(data, [64,28*28])
         
         mb = minibatch(d_l3_reshaped, name="layer3_minibatch")
         print("mb shape {0}".format(mb.get_shape()))
-        d_l4 = fully_connected(tf.nn.relu6(mb), shape=[mb.get_shape()[1],1], name="layer4")
+        d_l4 = fully_connected(tf.nn.relu6(mb), shape=[mb.get_shape()[1],2], name="layer4")
         #return tf.Print(tf.nn.sigmoid(d_l4),[mb[:,0]], message = "MB's Value: ")
-        return tf.nn.sigmoid(d_l4)
+        return d_l4#tf.nn.sigmoid(d_l4)
     
 def deconv2d(input_data, filter_shape, output_shape, padding = 'SAME', k = 2, name="deconv2d"):
     with tf.variable_scope(name):
-        filter = tf.get_variable("filter", filter_shape, initializer=tf.truncated_normal_initializer(stddev=0.01))
+        filter = tf.get_variable("filter", filter_shape, initializer=tf.contrib.layers.xavier_initializer_conv2d(uniform=False))
         return tf.nn.conv2d_transpose(value=input_data,
                                      filter=filter, 
                                      output_shape=output_shape,
@@ -284,7 +284,7 @@ with graph.as_default():
     generated_image = generator(tf_train_random)
     
     generator_logits = discriminator(generated_image, reuse=False)
-    generator_loss = tf.nn.l2_loss(generator_logits- tf.ones([batch_size,1]))
+    generator_loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(generator_logits,tf.tile(tf.constant([[0,1]],dtype=tf.float32),[batch_size,1])))
     
     generator_loss2 = tf.nn.l2_loss(generated_image-tf_train_dataset)
     
@@ -300,10 +300,11 @@ with graph.as_default():
     classifier_real_logits = discriminator(tf_train_dataset)
     print(tf_train_dataset.get_shape())
     print(classifier_real_logits.get_shape())
-    classifier_real_loss = tf.nn.l2_loss(classifier_real_logits - tf.ones([batch_size,1]))
+    print(generator_logits.get_shape())
+    classifier_real_loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(classifier_real_logits,tf.tile(tf.constant([[0,1]],dtype=tf.float32),[batch_size,1])))
 
     classifier_fake_logits = generator_logits
-    classifier_fake_loss = tf.nn.l2_loss(classifier_fake_logits - tf.zeros([batch_size,1]))
+    classifier_fake_loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(classifier_fake_logits,tf.tile(tf.constant([[1,0]],dtype=tf.float32),[batch_size,1])))
 
     classifier_loss = classifier_real_loss + classifier_fake_loss
 
@@ -376,7 +377,7 @@ with tf.Session(graph=graph) as session:
 
         
         #else:
-        if step>200:
+        if step>=100:
             _ = session.run([generator_optimizer], feed_dict=feed_dict)
             _ = session.run([generator_optimizer], feed_dict=feed_dict)
             updated_generator=True
@@ -391,8 +392,8 @@ with tf.Session(graph=graph) as session:
                                                 classifier_fake_loss], feed_dict=feed_dict)
         #print (redirect.stop())
         
-        #if (step % 10 == 0):
-        #    print("Generator Loss: {0}, Classifier loss: {1}, Real: {2}, Fake: {3}".format(g_loss, cr_loss + cf_loss, cr_loss, cf_loss))
+        if (step % 10 == 0 or step <100):
+            print("Generator Loss: {0}, Classifier loss: {1}, Real: {2}, Fake: {3}".format(g_loss, cr_loss + cf_loss, cr_loss, cf_loss))
         if (step % 100 == 0):
             
             images = session.run([generated_image], feed_dict=feed_dict)
@@ -416,11 +417,6 @@ with tf.Session(graph=graph) as session:
             if updated_generator:
                 plot_images(debug_image, session=session)
                 updated_generator=False
-
-
-# In[ ]:
-
-
 
 
 # In[ ]:
