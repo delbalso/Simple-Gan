@@ -46,12 +46,6 @@ def plot_images(images):
 
 # In[ ]:
 
-import shutil
-shutil.rmtree('/tmp/train')
-
-
-# In[ ]:
-
 def variable_summaries(var, name):
   """Attach a lot of summaries to a Tensor."""
   with tf.name_scope('summaries'):
@@ -67,81 +61,11 @@ def variable_summaries(var, name):
 
 # In[ ]:
 
-import os
-import sys
-
-STDOUT = 1
-STDERR = 2
-
-class FDRedirector(object):
-    """ Class to redirect output (stdout or stderr) at the OS level using
-        file descriptors.
-    """ 
-
-    def __init__(self, fd=STDOUT):
-        """ fd is the file descriptor of the outpout you want to capture.
-            It can be STDOUT or STERR.
-        """
-        self.fd = fd
-        self.started = False
-        self.piper = None
-        self.pipew = None
-
-    def start(self):
-        """ Setup the redirection.
-        """
-        if not self.started:
-            self.oldhandle = os.dup(self.fd)
-            self.piper, self.pipew = os.pipe()
-            os.dup2(self.pipew, self.fd)
-            os.close(self.pipew)
-
-            self.started = True
-
-    def flush(self):
-        """ Flush the captured output, similar to the flush method of any
-        stream.
-        """
-        if self.fd == STDOUT:
-            sys.stdout.flush()
-        elif self.fd == STDERR:
-            sys.stderr.flush()
-
-    def stop(self):
-        """ Unset the redirection and return the captured output. 
-        """
-        if self.started:
-            self.flush()
-            os.dup2(self.oldhandle, self.fd)
-            os.close(self.oldhandle)
-            f = os.fdopen(self.piper, 'r')
-            output = f.read()
-            f.close()
-
-            self.started = False
-            return output
-        else:
-            return ''
-
-    def getvalue(self):
-        """ Return the output captured since the last getvalue, or the
-        start of the redirection.
-        """
-        output = self.stop()
-        self.start()
-        return output
-
-
-# In[ ]:
-
 from tensorflow.examples.tutorials.mnist import input_data
 mnist = input_data.read_data_sets("MNIST_data", one_hot=True)
 
 
 # In[ ]:
-
-def maxpool(x, k=2):
-    return tf.nn.max_pool(x, ksize=[1, k, k, 1], strides=[1, k, k, 1], padding='SAME')
 
 def conv(input_data, shape, k=2, name="conv2d"):
     with tf.variable_scope(name):
@@ -173,7 +97,7 @@ def discriminator(data, reuse=True):
         if reuse:
             tf.get_variable_scope().reuse_variables()
         channels = 512
-        d_l1 = batch_norm(conv(data, shape=[4, 4, num_channels, channels/4], k=2, name="layer1"), channels/4, name= "layer1")
+        d_l1 = conv(data, shape=[4, 4, num_channels, channels/4], k=2, name="layer1")
         d_l2 = batch_norm(conv(tf.nn.relu6(d_l1), shape=[4, 4, channels/4, channels/2], k=2,name="layer2"), channels/2, name = "layer2")
         d_l3 = batch_norm(conv(tf.nn.relu6(d_l2), shape=[4, 4, channels/2, channels], k=2, name="layer3"), channels, name = "layer3")
         fm3_shape = 4*4*channels
@@ -184,11 +108,11 @@ def discriminator(data, reuse=True):
         print("mb shape {0}".format(mb.get_shape()))
         d_l4 = fully_connected(tf.nn.relu6(mb), shape=[mb.get_shape()[1],2], name="layer4")
         #return tf.Print(tf.nn.sigmoid(d_l4),[mb[:,0]], message = "MB's Value: ")
-        return d_l4
+        return tf.nn.sigmoid(d_l4)
     
 def deconv2d(input_data, filter_shape, output_shape, padding = 'SAME', k = 2, name="deconv2d"):
     with tf.variable_scope(name):
-        filter = tf.get_variable("filter", filter_shape, initializer=tf.truncated_normal_initializer(stddev=0.02))
+        filter = tf.get_variable("filter", filter_shape, initializer=tf.truncated_normal_initializer(stddev=0.2))
         return tf.nn.conv2d_transpose(value=input_data,
                                      filter=filter, 
                                      output_shape=output_shape,
@@ -205,34 +129,13 @@ def batch_norm(input_data, size, conv = True, name="batch_norm"):
             mean, variance = tf.nn.moments(input_data,axes=[0])
         return tf.nn.batch_normalization(input_data, mean, variance, offset, scale, variance_epsilon=1e-5)
     
-def fdiscriminator(image, reuse=True):
-    with tf.variable_scope("discriminator"):
-        if reuse:
-            tf.get_variable_scope().reuse_variables()
-        image = tf.reshape(image,[-1,28*28])
-        l0 = tf.nn.relu(batch_norm(fully_connected(image, shape=[28*28,28*28/2], name="layer0"),1,name="layer0",conv=False))
-        l1 = tf.nn.relu(batch_norm(fully_connected(l0, shape=[28*28/2,28*28/4], name="layer1"),1,name="layer1",conv=False))
-        l2 = tf.nn.relu(batch_norm(fully_connected(l1, shape=[28*28/4,28*28/8], name="layer2"),1,name="layer2",conv=False))
-        l3 = tf.nn.sigmoid(batch_norm(fully_connected(l2, shape=[28*28/8,2], name="layer3"),1,name="layer3",conv=False))
-        return tf.reshape(l3,[64,2])
-    
-def fgenerator(noise, reuse=True):
-    with tf.variable_scope("generator"):
-        if reuse:
-            tf.get_variable_scope().reuse_variables()
-        l0 = tf.nn.relu(batch_norm(fully_connected(noise, shape=[noise.get_shape()[1],28*28/8], name="layer0"),1,name="layer0",conv=False))
-        l1 = tf.nn.relu(batch_norm(fully_connected(l0, shape=[28*28/8,28*28/4], name="layer1"),1,name="layer1",conv=False))
-        l2 = tf.nn.relu(batch_norm(fully_connected(l1, shape=[28*28/4,28*28/2], name="layer2"),1,name="layer2",conv=False))
-        l3 = tf.nn.sigmoid(batch_norm(fully_connected(l2, shape=[28*28/2,28*28], name="layer3"),1,name="layer3",conv=False))
-        return tf.reshape(l3,[64,28,28,1])
-    
 def generator(noise, reuse=True):
     num_examples = tf.shape(noise)[0]
     with tf.variable_scope("generator"):
         if reuse:
             tf.get_variable_scope().reuse_variables()
             
-        channels = 256
+        channels = 512
 
         l0 = fully_connected(noise, shape=[noise.get_shape()[1],4*4*channels], name="layer0")
         l0_sq = tf.reshape(l0, [num_examples,4,4,channels])
@@ -258,7 +161,7 @@ def generator(noise, reuse=True):
                       output_shape=[num_examples,28,28,1],
                       name = "layer3")
 
-        layer3 = tf.nn.tanh(batch_norm(fm3,1,name = "layer3"))/2+.5
+        layer3 = tf.nn.tanh(fm3)/2+.5
         output = layer3
         #tf.reshape(layer4,[-1,image_size, image_size,1])
         print("layer1 shape= {0}".format(layer1.get_shape()))
@@ -308,7 +211,7 @@ with graph.as_default():
 
     # Generator Optimizer
     generator_variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "generator")
-    generator_learnrate = tf.train.exponential_decay(0.001, global_step, 10000, 0.96, staircase=True)
+    generator_learnrate = tf.train.exponential_decay(0.003, global_step, 10000, 0.96, staircase=True)
     g_opt = tf.train.AdamOptimizer(generator_learnrate)
     g_gradients = g_opt.compute_gradients(generator_loss, var_list=generator_variables)
     g_apply = g_opt.apply_gradients(g_gradients, global_step=global_step)
@@ -369,7 +272,6 @@ step = 0
 updated_generator=True
 fake_data, updates = {}, []
 cr_loss, cf_loss, g_loss, d_acc = .5, .5, .5, .5
-redirect=FDRedirector(STDERR)
 #batch_data, batch_labels = mnist.train.next_batch(batch_size)
 #batch_data = np.tile(batch_data[1], (batch_size,1))
 #batch_data = batch_data.reshape([batch_size,28,28,1])
@@ -395,7 +297,7 @@ with tf.Session(graph=graph) as session:
 
         _ = session.run([check], feed_dict=feed_dict)
 
-        if (d_acc<.95) and step != 50:
+        if (d_acc<.8) and step != 50 or step<30:
             updates.append("_")
             d_grad, _, cr_loss, cf_loss, d_acc = session.run([d_gradients, 
                                                    d_apply, 
@@ -426,11 +328,11 @@ with tf.Session(graph=graph) as session:
                 assert (len(g_grad)==len(generator_variables))
                 for i in xrange(len(generator_variables)):
                     g = g_grad[i][0]
-                    print ("{0}'s gradients have {1} ({2:.2f}%) zeros and mean {3:.1}".format(generator_variables[i].name,g.size-np.count_nonzero(g), (g.size-np.count_nonzero(g)+0.0)/g.size*100, np.mean(g)))
+                    print ("{0}'s gradients have {1} ({2:.2f}%) zeros and mean {3}".format(generator_variables[i].name,g.size-np.count_nonzero(g), (g.size-np.count_nonzero(g)+0.0)/g.size*100, np.mean(g)))
             for i in xrange(len(classifier_variables)):
                 g = d_grad[i][0]
-                print ("{0}'s gradients have {1} ({2:.2f}%) zeros and mean {3:.2f}".format(classifier_variables[i].name,g.size-np.count_nonzero(g), (g.size-np.count_nonzero(g)+0.0)/g.size*100, np.mean(g)))
-            #print(tf.get_default_graph().get_tensor_by_name("discriminator/layer3_minibatch/w:0").eval()[0])
+                print ("{0}'s gradients have {1} ({2:.2f}%) zeros and mean {3}".format(classifier_variables[i].name,g.size-np.count_nonzero(g), (g.size-np.count_nonzero(g)+0.0)/g.size*100, np.mean(g)))
+            print(tf.get_default_graph().get_tensor_by_name("discriminator/layer3_minibatch/w:0").eval()[0])
             
             
             print("Step {0}".format(step))
