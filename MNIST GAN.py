@@ -8,17 +8,11 @@
 
 # In[ ]:
 
-#from __future__ import print_function
 import numpy as np
 import tensorflow as tf
-#import matplotlib.pyplot as plt
-#from six.moves import range
 import pylab as pl
 import time
 from IPython import display
-#import tdb
-#from tdb.examples import viz
-
 get_ipython().magic(u'matplotlib inline')
 
 
@@ -29,14 +23,9 @@ import PIL.Image as im
 def save_image(image):
     im.fromarray(np.uint8(pl.cm.Greys(image)*255)).convert('RGB').save("result.jpeg")
     
-
 pl.rcParams["figure.figsize"] = 15,15
 
-def plot_images(image_ref, session=None, tensor=True):
-    if tensor:
-        images = session.run([image_ref])
-    else:
-        images = image_ref
+def plot_images(images):
     images = np.squeeze(images)
     edge_size = np.sqrt(images.shape[0])
     new_row = []
@@ -183,11 +172,11 @@ def discriminator(data, reuse=True):
     with tf.variable_scope("discriminator"):
         if reuse:
             tf.get_variable_scope().reuse_variables()
-        channels = 4
-        d_l1 = batch_norm(conv(data, shape=[4, 4, num_channels, channels], k=2, name="layer1"), channels/1, name = "layer1")
-        d_l2 = batch_norm(conv(tf.nn.relu6(d_l1), shape=[4, 4, channels, channels/2], k=2,name="layer2"), channels/2, name = "layer2")
-        d_l3 = batch_norm(conv(tf.nn.relu6(d_l2), shape=[4, 4, channels/2, channels/4], k=2, name="layer3"), channels/4, name = "layer3")
-        fm3_shape = 4*4*channels/4
+        channels = 512
+        d_l1 = batch_norm(conv(data, shape=[4, 4, num_channels, channels/4], k=2, name="layer1"), channels/4, name= "layer1")
+        d_l2 = batch_norm(conv(tf.nn.relu6(d_l1), shape=[4, 4, channels/4, channels/2], k=2,name="layer2"), channels/2, name = "layer2")
+        d_l3 = batch_norm(conv(tf.nn.relu6(d_l2), shape=[4, 4, channels/2, channels], k=2, name="layer3"), channels, name = "layer3")
+        fm3_shape = 4*4*channels
         d_l3_reshaped = tf.reshape(d_l3, [tf.shape(d_l3)[0],fm3_shape])
         #data_reshaped = tf.reshape(data, [64,28*28])
         
@@ -195,56 +184,83 @@ def discriminator(data, reuse=True):
         print("mb shape {0}".format(mb.get_shape()))
         d_l4 = fully_connected(tf.nn.relu6(mb), shape=[mb.get_shape()[1],2], name="layer4")
         #return tf.Print(tf.nn.sigmoid(d_l4),[mb[:,0]], message = "MB's Value: ")
-        return d_l4#tf.nn.sigmoid(d_l4)
+        return d_l4
     
 def deconv2d(input_data, filter_shape, output_shape, padding = 'SAME', k = 2, name="deconv2d"):
     with tf.variable_scope(name):
-        filter = tf.get_variable("filter", filter_shape, initializer=tf.contrib.layers.xavier_initializer_conv2d(uniform=False))
+        filter = tf.get_variable("filter", filter_shape, initializer=tf.truncated_normal_initializer(stddev=0.02))
         return tf.nn.conv2d_transpose(value=input_data,
                                      filter=filter, 
                                      output_shape=output_shape,
                                      strides=[1,k,k,1],
                                      padding=padding, name="feature_maps")
     
-def batch_norm(input_data, size,name="batch_norm"):
+def batch_norm(input_data, size, conv = True, name="batch_norm"):
     with tf.variable_scope(name):
         offset = tf.get_variable("offset", [size], initializer=tf.truncated_normal_initializer(stddev=0.01))
         scale = tf.get_variable("scale", [size], initializer=tf.truncated_normal_initializer(stddev=0.01))
-        mean, variance = tf.nn.moments(input_data,axes=[0,1,2])
+        if conv:
+            mean, variance = tf.nn.moments(input_data,axes=[0,1,2])
+        else:
+            mean, variance = tf.nn.moments(input_data,axes=[0])
         return tf.nn.batch_normalization(input_data, mean, variance, offset, scale, variance_epsilon=1e-5)
+    
+def fdiscriminator(image, reuse=True):
+    with tf.variable_scope("discriminator"):
+        if reuse:
+            tf.get_variable_scope().reuse_variables()
+        image = tf.reshape(image,[-1,28*28])
+        l0 = tf.nn.relu(batch_norm(fully_connected(image, shape=[28*28,28*28/2], name="layer0"),1,name="layer0",conv=False))
+        l1 = tf.nn.relu(batch_norm(fully_connected(l0, shape=[28*28/2,28*28/4], name="layer1"),1,name="layer1",conv=False))
+        l2 = tf.nn.relu(batch_norm(fully_connected(l1, shape=[28*28/4,28*28/8], name="layer2"),1,name="layer2",conv=False))
+        l3 = tf.nn.sigmoid(batch_norm(fully_connected(l2, shape=[28*28/8,2], name="layer3"),1,name="layer3",conv=False))
+        return tf.reshape(l3,[64,2])
+    
+def fgenerator(noise, reuse=True):
+    with tf.variable_scope("generator"):
+        if reuse:
+            tf.get_variable_scope().reuse_variables()
+        l0 = tf.nn.relu(batch_norm(fully_connected(noise, shape=[noise.get_shape()[1],28*28/8], name="layer0"),1,name="layer0",conv=False))
+        l1 = tf.nn.relu(batch_norm(fully_connected(l0, shape=[28*28/8,28*28/4], name="layer1"),1,name="layer1",conv=False))
+        l2 = tf.nn.relu(batch_norm(fully_connected(l1, shape=[28*28/4,28*28/2], name="layer2"),1,name="layer2",conv=False))
+        l3 = tf.nn.sigmoid(batch_norm(fully_connected(l2, shape=[28*28/2,28*28], name="layer3"),1,name="layer3",conv=False))
+        return tf.reshape(l3,[64,28,28,1])
     
 def generator(noise, reuse=True):
     num_examples = tf.shape(noise)[0]
     with tf.variable_scope("generator"):
         if reuse:
             tf.get_variable_scope().reuse_variables()
+            
+        channels = 256
 
-        l0 = fully_connected(noise, shape=[64,4*4*512], name="layer0")
-        l0_sq = tf.reshape(l0, [num_examples,4,4,512])
-        layer0 =  tf.nn.relu(batch_norm(l0_sq,512, name = "layer0"))
+        l0 = fully_connected(noise, shape=[noise.get_shape()[1],4*4*channels], name="layer0")
+        l0_sq = tf.reshape(l0, [num_examples,4,4,channels])
+        layer0 =  tf.nn.relu(batch_norm(l0_sq,channels, name = "layer0"))
         
         
         fm1 = deconv2d(layer0, # 64,8,8,1
-                      filter_shape= [4,4,256,512], 
-                      output_shape=[num_examples,7,7,256],
+                      filter_shape= [4,4,channels/2,channels], 
+                      output_shape=[num_examples,7,7,channels/2],
                       padding = "VALID",
                       k=1,
                       name = "layer1")
-        layer1 = tf.nn.relu(batch_norm(fm1,256, name = "layer1"))
+        layer1 = tf.nn.relu(batch_norm(fm1,channels/2, name = "layer1"))
         
         fm2 = deconv2d(layer1,
-                      filter_shape= [4,4,128,256],
-                      output_shape=[num_examples,14,14,128],
+                      filter_shape= [4,4,channels/4,channels/2],
+                      output_shape=[num_examples,14,14,channels/4],
                       name = "layer2")
-        layer2 = tf.nn.relu(batch_norm(fm2,128, name = "layer2"))
+        layer2 = tf.nn.relu(batch_norm(fm2,channels/4, name = "layer2"))
 
         fm3 = deconv2d(layer2,
-                      filter_shape=[4,4,1,128],
+                      filter_shape=[4,4,1,channels/4],
                       output_shape=[num_examples,28,28,1],
                       name = "layer3")
 
-        layer3 = tf.nn.sigmoid(fm3)
-        output = layer3#tf.reshape(layer4,[-1,image_size, image_size,1])
+        layer3 = tf.nn.tanh(batch_norm(fm3,1,name = "layer3"))/2+.5
+        output = layer3
+        #tf.reshape(layer4,[-1,image_size, image_size,1])
         print("layer1 shape= {0}".format(layer1.get_shape()))
         print("layer2 shape= {0}".format(layer2.get_shape()))
         print("layer3 shape= {0}".format(layer3.get_shape()))
@@ -259,7 +275,7 @@ batch_size = 64
 image_size = 28
 num_channels = 1 # grayscale
 
-random_vector_size = 64
+random_vector_size = 100
 
 tf.reset_default_graph()
 graph = tf.Graph()
@@ -278,21 +294,24 @@ with graph.as_default():
         glayer1_biases = tf.Variable(tf.zeros([hidden_layer1_size]), name="b1")
         glayer2_biases = tf.Variable(tf.zeros([image_size * image_size]), name="b2")
 
+    
     #Generator Loss
     sample_points = tf.constant(np.random.uniform(0,1,(batch_size,random_vector_size)).astype(np.float32))
     debug_image = generator(sample_points, reuse=False)
     generated_image = generator(tf_train_random)
     
     generator_logits = discriminator(generated_image, reuse=False)
-    generator_loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(generator_logits,tf.tile(tf.constant([[0,1]],dtype=tf.float32),[batch_size,1])))
+    generator_loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(generator_logits,tf.tile(tf.constant([[.1,.9]],dtype=tf.float32),[batch_size,1])))
     
     generator_loss2 = tf.nn.l2_loss(generated_image-tf_train_dataset)
     
 
     # Generator Optimizer
     generator_variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "generator")
-    generator_learnrate = tf.train.exponential_decay(0.003, global_step, 500, 0.96, staircase=True)
-    generator_optimizer = tf.train.AdamOptimizer(generator_learnrate).minimize(generator_loss, var_list=generator_variables, global_step=global_step)  
+    generator_learnrate = tf.train.exponential_decay(0.001, global_step, 10000, 0.96, staircase=True)
+    g_opt = tf.train.AdamOptimizer(generator_learnrate)
+    g_gradients = g_opt.compute_gradients(generator_loss, var_list=generator_variables)
+    g_apply = g_opt.apply_gradients(g_gradients, global_step=global_step)
 
     generator_optimizer2 = tf.train.AdamOptimizer(.003).minimize(generator_loss2, var_list=generator_variables, global_step=global_step)  
     
@@ -301,16 +320,23 @@ with graph.as_default():
     print(tf_train_dataset.get_shape())
     print(classifier_real_logits.get_shape())
     print(generator_logits.get_shape())
-    classifier_real_loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(classifier_real_logits,tf.tile(tf.constant([[0,1]],dtype=tf.float32),[batch_size,1])))
+    classifier_real_loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(classifier_real_logits,tf.tile(tf.constant([[.1,.9]],dtype=tf.float32),[batch_size,1])))
 
     classifier_fake_logits = generator_logits
-    classifier_fake_loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(classifier_fake_logits,tf.tile(tf.constant([[1,0]],dtype=tf.float32),[batch_size,1])))
+    classifier_fake_loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(classifier_fake_logits,tf.tile(tf.constant([[.9,.1]],dtype=tf.float32),[batch_size,1])))
+    classifier_acc = tf.reduce_sum(tf.pack([tf.round(tf.nn.softmax(classifier_real_logits))[:,1],
+                                            tf.round(tf.nn.softmax(classifier_fake_logits))[:,0]]))/(batch_size*2)
+    variable_summaries(classifier_acc, "discriminator/accuracy")
+    print ("acc shape {0}".format(classifier_acc.get_shape()))
+    #a = 0#tf.reduce_sum(tf.pack([tf.round(tf.nn.softmax(classifier_real_logits))[:,1],
+                              #tf.round(tf.nn.softmax(classifier_fake_logits))[:,0]]))
 
+ 
     classifier_loss = classifier_real_loss + classifier_fake_loss
 
     # Discriminator Optimizer.
     classifier_variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "discriminator")
-    classifier_learnrate = tf.train.exponential_decay(0.003, global_step, 500, 0.96, staircase=True)
+    classifier_learnrate = tf.train.exponential_decay(0.0005, global_step, 10000, 0.96, staircase=True)
     classifier_optimizer = tf.train.AdamOptimizer(classifier_learnrate).minimize(classifier_loss, var_list=classifier_variables, global_step=global_step)
     d_opt = tf.train.AdamOptimizer(classifier_learnrate)
     d_gradients = d_opt.compute_gradients(classifier_loss, classifier_variables)
@@ -341,70 +367,69 @@ with graph.as_default():
 num_steps = 70000
 step = 0
 updated_generator=True
-cr_loss, cf_loss, g_loss = .5, .5, .5
+fake_data, updates = {}, []
+cr_loss, cf_loss, g_loss, d_acc = .5, .5, .5, .5
 redirect=FDRedirector(STDERR)
 #batch_data, batch_labels = mnist.train.next_batch(batch_size)
-#batch_data = np.tile(batch_data[1:3], (batch_size/2,1))
+#batch_data = np.tile(batch_data[1], (batch_size,1))
 #batch_data = batch_data.reshape([batch_size,28,28,1])
-#plot_images(batch_data, tensor=False)
+#plot_images(batch_data)
 with tf.Session(graph=graph) as session:
     tf.initialize_all_variables().run()
     train_writer = tf.train.SummaryWriter('/tmp/train', session.graph)
     print('Initialized')
+
     for step in xrange(num_steps):
+        #feed_dict = {tf_train_dataset : batch_data, 
+        #             tf_train_random: np.random.random((batch_size,random_vector_size)).astype(np.float32)}
+        #image,_ = session.run([generated_image, generator_optimizer2], feed_dict=feed_dict)
+        #if (step%10==0):
+        #    plot_images(image)
+        #continue
+
         # prepare batch of training data
         batch_data, batch_labels = mnist.train.next_batch(batch_size)
         batch_data = batch_data.reshape([-1,28,28,1])
         feed_dict = {tf_train_dataset : batch_data, 
                      tf_train_random: np.random.random((batch_size,random_vector_size)).astype(np.float32)}
 
-#        _ = tdb.debug([p0], feed_dict=feed_dict, session =tf.get_default_session())
         _ = session.run([check], feed_dict=feed_dict)
-        #_ = session.run([generator_optimizer2], feed_dict=feed_dict)
 
-
-        #if g_loss < cr_loss + cf_loss or step<300:
-        """grad, = session.run([d_gradients], feed_dict=feed_dict)
-        assert (len(grad)==len(classifier_variables))
-        for i in xrange(len(classifier_variables)):
-            g = grad[i][0]
-            print (g)
-            print ("{0}'s gradients have {1} ({2}%) zeros and mean {3}".format(classifier_variables[i].name,g.size-np.count_nonzero(g), (g.size-np.count_nonzero(g)+0.0)/g.size*100, np.mean(g)))
-        
-        
-        raise"""
-        grad, _ = session.run([d_gradients, d_apply], feed_dict=feed_dict)
-
-        
-        #else:
-        if step>=100:
-            _ = session.run([generator_optimizer], feed_dict=feed_dict)
-            _ = session.run([generator_optimizer], feed_dict=feed_dict)
+        if (d_acc<.95) and step != 50:
+            updates.append("_")
+            d_grad, _, cr_loss, cf_loss, d_acc = session.run([d_gradients, 
+                                                   d_apply, 
+                                                   classifier_real_loss,
+                                                   classifier_fake_loss,
+                                                   classifier_acc
+                                                  ], feed_dict=feed_dict)
+        else:
+            updates.append("G")
+            #_ = session.run([g_apply], feed_dict=feed_dict)
+            g_grad, _, g_loss, d_acc = session.run([g_gradients, g_apply, generator_loss, classifier_acc], feed_dict=feed_dict)
             updated_generator=True
-
         summary, gs = session.run([merged, global_step], feed_dict=feed_dict)
 
         
         train_writer.add_summary(summary, gs)
         #redirect.start()
-        g_loss, cr_loss, cf_loss = session.run([generator_loss,
-                                                classifier_real_loss,
-                                                classifier_fake_loss], feed_dict=feed_dict)
         #print (redirect.stop())
         
-        if (step % 10 == 0 or step <100):
-            print("Generator Loss: {0}, Classifier loss: {1}, Real: {2}, Fake: {3}".format(g_loss, cr_loss + cf_loss, cr_loss, cf_loss))
+        if (step % 10 == 0):
+            print("{0}  Generator Loss: {1:.3f}, Classifier loss: {2:.3f}, Real: {3:.3f}, Fake: {4:.3f}, Acc: {5:.2f}".format(''.join(updates), g_loss, cr_loss + cf_loss, cr_loss, cf_loss, d_acc))
+            updates=[]
         if (step % 100 == 0):
             
             images = session.run([generated_image], feed_dict=feed_dict)
-            #if step >1000:
-            #    raise
-            for var in tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "discriminator/layer3_minibatch"):
-                print("Name: {0}, Shape: {1}".format(var.name,tf.shape(var).eval()))
-            assert (len(grad)==len(classifier_variables))
+            assert (len(d_grad)==len(classifier_variables))
+            if step>=2:
+                assert (len(g_grad)==len(generator_variables))
+                for i in xrange(len(generator_variables)):
+                    g = g_grad[i][0]
+                    print ("{0}'s gradients have {1} ({2:.2f}%) zeros and mean {3:.1}".format(generator_variables[i].name,g.size-np.count_nonzero(g), (g.size-np.count_nonzero(g)+0.0)/g.size*100, np.mean(g)))
             for i in xrange(len(classifier_variables)):
-                g = grad[i][0]
-                print ("{0}'s gradients have {1} ({2}%) zeros and mean {3}".format(classifier_variables[i].name,g.size-np.count_nonzero(g), (g.size-np.count_nonzero(g)+0.0)/g.size*100, np.mean(g)))
+                g = d_grad[i][0]
+                print ("{0}'s gradients have {1} ({2:.2f}%) zeros and mean {3:.2f}".format(classifier_variables[i].name,g.size-np.count_nonzero(g), (g.size-np.count_nonzero(g)+0.0)/g.size*100, np.mean(g)))
             #print(tf.get_default_graph().get_tensor_by_name("discriminator/layer3_minibatch/w:0").eval()[0])
             
             
@@ -412,11 +437,33 @@ with tf.Session(graph=graph) as session:
             #print("Classifier loss: {0}, Real: {1}, Fake: {2}".format(cr_loss + cf_loss, cr_loss, cf_loss))
             #print("Generator Loss: {0}".format(g_loss))
             clr, glr = session.run([classifier_learnrate,generator_learnrate])
-            print ("Classifier learn rate: {0}, Generator learn rate: {1}".format(clr,glr))
+            print ("Classifier learn rate: {0:.8f}, Generator learn rate: {1:.8f}".format(clr,glr))
             
             if updated_generator:
-                plot_images(debug_image, session=session)
+                plot_images(session.run([debug_image]))
                 updated_generator=False
+
+
+# In[ ]:
+
+#fake_data = {}
+#generated_images = {}
+#for i in xrange(10):
+#    fake_data[i] = np.random.random((batch_size,random_vector_size)).astype(np.float32)
+#    feed_dict = {tf_train_random: fake_data[i]}
+#    generated_images[i] = session.run([generated_image], feed_dict=feed_dict)
+#    plot_images(generated_images)
+    
+
+
+# In[ ]:
+
+
+
+
+# In[ ]:
+
+
 
 
 # In[ ]:
