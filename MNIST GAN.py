@@ -70,22 +70,22 @@ mnist = input_data.read_data_sets("MNIST_data", one_hot=True)
 def conv(input_data, shape, k=2, name="conv2d"):
     with tf.variable_scope(name):
         filter = tf.get_variable("filter", shape, initializer=tf.truncated_normal_initializer(stddev=1))
-        b = tf.get_variable("b", [shape[3]], initializer=tf.truncated_normal_initializer(stddev=0.01))
+        b = tf.get_variable("b", [shape[3]], initializer=tf.constant_initializer())
         return tf.nn.conv2d(input_data, filter, [1, k, k, 1], padding='SAME')+b
 
 
-def fully_connected(input_data, shape, use_bias = True, stddev = 0.01, name="fully_connected"):
+def fully_connected(input_data, shape, use_bias = True, stddev = 0.02, name="fully_connected"):
     assert input_data.get_shape()[1] == shape[0], "input shape = {0}, w shape = {1}".format(input_data.get_shape(),shape)
     with tf.variable_scope(name):
         w = tf.get_variable("w", shape, initializer=tf.truncated_normal_initializer(stddev=stddev))
         if use_bias:
-            b = tf.get_variable("b", [shape[1]], initializer=tf.truncated_normal_initializer(stddev=stddev))
+            b = tf.get_variable("b", [shape[1]], initializer=tf.constant_initializer())
             return tf.matmul(input_data, w) + b
         else:
             return tf.matmul(input_data, w)
 
 def minibatch(input, num_kernels=5, kernel_dim=3, name="minibatch"):
-    x = fully_connected(input, [input.get_shape()[1], num_kernels * kernel_dim], use_bias=False, stddev = 100, name=name)
+    x = fully_connected(input, [input.get_shape()[1], num_kernels * kernel_dim], use_bias=False, stddev = 10, name=name)
     activation = tf.reshape(x, (-1, num_kernels, kernel_dim))
     diffs = tf.expand_dims(activation, 3) -         tf.expand_dims(tf.transpose(activation, [1, 2, 0]), 0)
     abs_diffs = tf.reduce_sum(tf.abs(diffs), 2)
@@ -107,12 +107,12 @@ def discriminator(data, reuse=True):
         mb = minibatch(d_l3_reshaped, name="layer3_minibatch")
         print("mb shape {0}".format(mb.get_shape()))
         d_l4 = fully_connected(tf.nn.relu6(mb), shape=[mb.get_shape()[1],2], name="layer4")
-        #return tf.Print(tf.nn.sigmoid(d_l4),[mb[:,0]], message = "MB's Value: ")
-        return tf.nn.sigmoid(d_l4)
+        return tf.Print(tf.nn.sigmoid(d_l4),[mb[:5,0]], message = "MB's Value: ")
+        #return tf.nn.sigmoid(d_l4)
     
 def deconv2d(input_data, filter_shape, output_shape, padding = 'SAME', k = 2, name="deconv2d"):
     with tf.variable_scope(name):
-        filter = tf.get_variable("filter", filter_shape, initializer=tf.truncated_normal_initializer(stddev=0.2))
+        filter = tf.get_variable("filter", filter_shape, initializer=tf.truncated_normal_initializer(stddev=0.02))
         return tf.nn.conv2d_transpose(value=input_data,
                                      filter=filter, 
                                      output_shape=output_shape,
@@ -211,7 +211,7 @@ with graph.as_default():
 
     # Generator Optimizer
     generator_variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "generator")
-    generator_learnrate = tf.train.exponential_decay(0.003, global_step, 10000, 0.96, staircase=True)
+    generator_learnrate = tf.train.exponential_decay(0.001, global_step, 10000, 0.96, staircase=True)
     g_opt = tf.train.AdamOptimizer(generator_learnrate)
     g_gradients = g_opt.compute_gradients(generator_loss, var_list=generator_variables)
     g_apply = g_opt.apply_gradients(g_gradients, global_step=global_step)
@@ -239,7 +239,7 @@ with graph.as_default():
 
     # Discriminator Optimizer.
     classifier_variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "discriminator")
-    classifier_learnrate = tf.train.exponential_decay(0.0005, global_step, 10000, 0.96, staircase=True)
+    classifier_learnrate = tf.train.exponential_decay(0.0004, global_step, 10000, 0.96, staircase=True)
     classifier_optimizer = tf.train.AdamOptimizer(classifier_learnrate).minimize(classifier_loss, var_list=classifier_variables, global_step=global_step)
     d_opt = tf.train.AdamOptimizer(classifier_learnrate)
     d_gradients = d_opt.compute_gradients(classifier_loss, classifier_variables)
@@ -297,22 +297,21 @@ with tf.Session(graph=graph) as session:
 
         _ = session.run([check], feed_dict=feed_dict)
 
-        if (d_acc<.8) and step != 50 or step<30:
-            updates.append("_")
-            d_grad, _, cr_loss, cf_loss, d_acc = session.run([d_gradients, 
-                                                   d_apply, 
-                                                   classifier_real_loss,
-                                                   classifier_fake_loss,
-                                                   classifier_acc
-                                                  ], feed_dict=feed_dict)
-        else:
+        #if (d_acc<.8) and step != 50 or step<30:
+        updates.append("_")
+        d_grad, _, cr_loss, cf_loss, d_acc = session.run([d_gradients, 
+                                               d_apply, 
+                                               classifier_real_loss,
+                                               classifier_fake_loss,
+                                               classifier_acc
+                                              ], feed_dict=feed_dict)
+    
+        for i in xrange(int((d_acc*1.5+1)**2)):
             updates.append("G")
-            #_ = session.run([g_apply], feed_dict=feed_dict)
             g_grad, _, g_loss, d_acc = session.run([g_gradients, g_apply, generator_loss, classifier_acc], feed_dict=feed_dict)
             updated_generator=True
-        summary, gs = session.run([merged, global_step], feed_dict=feed_dict)
 
-        
+        summary, gs = session.run([merged, global_step], feed_dict=feed_dict)
         train_writer.add_summary(summary, gs)
         #redirect.start()
         #print (redirect.stop())
@@ -320,7 +319,7 @@ with tf.Session(graph=graph) as session:
         if (step % 10 == 0):
             print("{0}  Generator Loss: {1:.3f}, Classifier loss: {2:.3f}, Real: {3:.3f}, Fake: {4:.3f}, Acc: {5:.2f}".format(''.join(updates), g_loss, cr_loss + cf_loss, cr_loss, cf_loss, d_acc))
             updates=[]
-        if (step % 100 == 0):
+        if (step % 10 == 0):
             
             images = session.run([generated_image], feed_dict=feed_dict)
             assert (len(d_grad)==len(classifier_variables))
