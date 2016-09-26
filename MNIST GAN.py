@@ -69,7 +69,7 @@ mnist = input_data.read_data_sets("MNIST_data", one_hot=True)
 
 def conv(input_data, shape, k=2, name="conv2d"):
     with tf.variable_scope(name):
-        filter = tf.get_variable("filter", shape, initializer=tf.truncated_normal_initializer(stddev=1))
+        filter = tf.get_variable("filter", shape, initializer=tf.contrib.layers.xavier_initializer_conv2d())#tf.truncated_normal_initializer(stddev=.01))
         b = tf.get_variable("b", [shape[3]], initializer=tf.constant_initializer())
         return tf.nn.conv2d(input_data, filter, [1, k, k, 1], padding='SAME')+b
 
@@ -99,7 +99,9 @@ def discriminator(data, reuse=True):
         channels = 512
         d_l1 = conv(data, shape=[4, 4, num_channels, channels/4], k=2, name="layer1")
         d_l2 = batch_norm(conv(tf.nn.relu6(d_l1), shape=[4, 4, channels/4, channels/2], k=2,name="layer2"), channels/2, name = "layer2")
-        d_l3 = batch_norm(conv(tf.nn.relu6(d_l2), shape=[4, 4, channels/2, channels], k=2, name="layer3"), channels, name = "layer3")
+        d_l25 = batch_norm(conv(tf.nn.relu6(d_l2), shape=[4, 4, channels/2, channels/2], k=1,name="layer25"), channels/2, name = "layer25")
+        d_l26 = batch_norm(conv(tf.nn.relu6(d_l25), shape=[4, 4, channels/2, channels/2], k=1,name="layer26"), channels/2, name = "layer26")
+        d_l3 = batch_norm(conv(tf.nn.relu6(d_l26+d_l2), shape=[4, 4, channels/2, channels], k=2, name="layer3"), channels, name = "layer3")
         fm3_shape = 4*4*channels
         d_l3_reshaped = tf.reshape(d_l3, [tf.shape(d_l3)[0],fm3_shape])
         #data_reshaped = tf.reshape(data, [64,28*28])
@@ -211,7 +213,7 @@ with graph.as_default():
 
     # Generator Optimizer
     generator_variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "generator")
-    generator_learnrate = tf.train.exponential_decay(0.001, global_step, 10000, 0.96, staircase=True)
+    generator_learnrate = tf.train.exponential_decay(0.001, global_step, 150, 0.96, staircase=True)
     g_opt = tf.train.AdamOptimizer(generator_learnrate)
     g_gradients = g_opt.compute_gradients(generator_loss, var_list=generator_variables)
     g_apply = g_opt.apply_gradients(g_gradients, global_step=global_step)
@@ -231,15 +233,13 @@ with graph.as_default():
                                             tf.round(tf.nn.softmax(classifier_fake_logits))[:,0]]))/(batch_size*2)
     variable_summaries(classifier_acc, "discriminator/accuracy")
     print ("acc shape {0}".format(classifier_acc.get_shape()))
-    #a = 0#tf.reduce_sum(tf.pack([tf.round(tf.nn.softmax(classifier_real_logits))[:,1],
-                              #tf.round(tf.nn.softmax(classifier_fake_logits))[:,0]]))
 
  
     classifier_loss = classifier_real_loss + classifier_fake_loss
 
     # Discriminator Optimizer.
     classifier_variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "discriminator")
-    classifier_learnrate = tf.train.exponential_decay(0.0004, global_step, 10000, 0.96, staircase=True)
+    classifier_learnrate = tf.train.exponential_decay(0.0005, global_step, 150, 0.96, staircase=True)
     classifier_optimizer = tf.train.AdamOptimizer(classifier_learnrate).minimize(classifier_loss, var_list=classifier_variables, global_step=global_step)
     d_opt = tf.train.AdamOptimizer(classifier_learnrate)
     d_gradients = d_opt.compute_gradients(classifier_loss, classifier_variables)
@@ -261,7 +261,6 @@ with graph.as_default():
         #print ("Image variable: {0}".format(var.name))
         #tf.summary.tensor_summary(var.name + '_tensor',var)
     merged = tf.merge_all_summaries()
-    #p0 = tdb.plot_op(viz.viz_conv_weights,inputs=[tf.get_default_graph().get_tensor_by_name("generator/layer1/filter:0")])
 
 
 
@@ -299,14 +298,15 @@ with tf.Session(graph=graph) as session:
 
         #if (d_acc<.8) and step != 50 or step<30:
         updates.append("_")
-        d_grad, _, cr_loss, cf_loss, d_acc = session.run([d_gradients, 
-                                               d_apply, 
-                                               classifier_real_loss,
-                                               classifier_fake_loss,
-                                               classifier_acc
-                                              ], feed_dict=feed_dict)
-    
-        for i in xrange(int((d_acc*1.5+1)**2)):
+        d_grad, _, cr_loss, cf_loss, d_acc, g_loss = session.run([d_gradients, 
+                                                                  d_apply, 
+                                                                  classifier_real_loss,
+                                                                  classifier_fake_loss,
+                                                                  classifier_acc,
+                                                                  generator_loss
+                                                                 ], feed_dict=feed_dict)
+
+        for i in xrange(int((g_loss/(cr_loss + cf_loss)*1.9+1)**2)):
             updates.append("G")
             g_grad, _, g_loss, d_acc = session.run([g_gradients, g_apply, generator_loss, classifier_acc], feed_dict=feed_dict)
             updated_generator=True
